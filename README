@@ -4,3 +4,8 @@
 '152******00'
 还未通用化
 已将该问题应用到BaiduPcs-cmake-nanopi中
+
+
+
+
+gcc  -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE ./mmap_test.c -lm
