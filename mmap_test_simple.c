@@ -10,7 +10,6 @@
 #include <assert.h>
 #include <unistd.h>
 #include <math.h>
-#include "zlog.h"
 /*
 https://github.com/coreutils/coreutils/blob/master/src/csplit.c
 coreutils' split in linux seems didn't use mmap
@@ -37,7 +36,6 @@ int main(int argc, char* argv[])
 	printf("sc_pagesize:%ld\n",sc_pagesize);
 	long long int pagesize = (long long int)(sc_pagesize*1000LL*1000LL/2LL);//nearly 4000MBytes
 	//long long int pagesize = (long long int)(sc_pagesize*10LL*10LL);//nearly 4000MBytes
-	long long int batch_size = sc_pagesize*10000LL*10LL;//loop mmap op mini unit
 	printf("%s\n",argv[1]);
 	printf("%s\n",argv[2]);
 	char* path = argv[1];
@@ -72,14 +70,13 @@ int main(int argc, char* argv[])
 	}
 	
 	int pagecount = st.st_size / pagesize;
-	long long int length = pagesize;//normally one slice file size
-	long long int mod_r = st.st_size % pagesize;
-	if (mod_r > 0LL)
+	long long int length = st.st_size % pagesize;
+	if (length > 0LL)
 	{
 		pagecount += 1;
-		if ((offset+1) == pagecount)
+		if ((offset+1) != pagecount)
 		{
-			length = mod_r;//last slice file size
+			length = pagesize;
 		}
 	}
 
@@ -90,6 +87,15 @@ int main(int argc, char* argv[])
 	{
 		fprintf(stderr,"101,offset value must smaller than %d\n",pagecount);
 		return 101;
+	}
+
+
+	void* rmap = mmap(NULL,length,PROT_READ,MAP_SHARED,fd,offset*pagesize);
+	if (rmap == (void *)-1)
+	{
+		perror("mmap failed!\n");
+		fprintf(stderr,"%s\n",strerror(errno));
+		return -1;
 	}
 	printf("-----------------\n");
 	char* slice_file = (char*)malloc(sizeof(path)/sizeof(char) + 10);
@@ -107,74 +113,16 @@ int main(int argc, char* argv[])
 		perror("ftruncate error!\n");
 		return -1;
 	}
-
-	if (length < batch_size)
+	void* wmap = mmap(NULL,length,PROT_READ|PROT_WRITE,MAP_SHARED,fdw,0);
+	if (wmap == (void *)-1)
 	{
-
-		printf("---------> length < batch_size\n");
-		void* rmap = mmap(NULL,length,PROT_READ,MAP_SHARED,fd,offset*pagesize);
-		if (rmap == (void *)-1)
-		{
-			perror("mmap failed!\n");
-			fprintf(stderr,"%s\n",strerror(errno));
-			return -1;
-		}
-		void* wmap = mmap(NULL,length,PROT_READ|PROT_WRITE,MAP_SHARED,fdw,0);
-		if (wmap == (void *)-1)
-		{
-			perror("wmmap failed!\n");
-			return -1;
-		}
-		memcpy(wmap,rmap,length);
-		//TODO:use pthead enhanced write speed
-		munmap(wmap,length);
-		munmap(rmap,length);
+		perror("wmmap failed!\n");
+		return -1;
 	}
-	else
-	{
-
-		printf("------>else\n");
-		//loop
-		long long int loop_times = length / batch_size;
-		int mod_r = length % batch_size;
-		if (mod_r > 0LL)
-		{
-			loop_times += 1;
-		}
-		long long int _length = batch_size;
-
-		printf("loop_times:%lld\n",loop_times);
-		for(long long int i = 0LL, j = 0LL; j < loop_times; i += batch_size,j++)
-		{
-			printf("%lld\n",j);
-			if (j == (loop_times -1) && mod_r > 0LL )
-			{
-				_length = mod_r;
-			}
-
-			void* rmap = mmap(NULL,_length,PROT_READ,MAP_SHARED,fd,offset*pagesize+i);
-			if (rmap == (void *)-1)
-			{
-				perror("mmap failed!\n");
-				fprintf(stderr,"%s\n",strerror(errno));
-				return -1;
-			}
-			void* wmap = mmap(NULL,_length,PROT_READ|PROT_WRITE,MAP_SHARED,fdw,i);
-			if (wmap == (void *)-1)
-			{
-				perror("wmmap failed!\n");
-				return -1;
-			}
-			memcpy(wmap,rmap,_length);
-			//TODO:use pthead enhanced write speed
-			munmap(wmap,_length);
-			munmap(rmap,_length);
-			
-		
-		}
-		
-	}
-	
+	memcpy(wmap,rmap,length);
+	//TODO:use pthead enhanced write speed
+	munmap(wmap,length);
+	munmap(rmap,length);
 	close(fd);
 	close(fdw);
 	free(slice_file);
